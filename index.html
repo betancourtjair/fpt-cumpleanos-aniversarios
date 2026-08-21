@@ -179,7 +179,7 @@
 <div class="container">
 
   <details class="warn-banner" id="warnBanner">
-    <summary id="warnSummary">⚠ Revisar en el archivo original — datos dudosos</summary>
+    <summary id="warnSummary">Revisar empleados "0" datos dudosos</summary>
     <ul id="warnList"></ul>
   </details>
 
@@ -281,7 +281,7 @@
     <p class="sub">Agrega altas nuevas una por una, o de forma masiva con un CSV. Los cambios aquí los ven los 4 accesos.</p>
 
     <div class="admin-section">
-      <h3>Agregar un empleado</h3>
+      <h3 id="addFormTitle">Agregar un empleado</h3>
       <div class="admin-grid">
         <div class="field"><label>Nombre completo *</label><input type="text" id="fNombre" placeholder="APELLIDOS NOMBRE"></div>
         <div class="field"><label>Número de empleado</label><input type="text" id="fNumEmpleado" placeholder="Opcional"></div>
@@ -296,6 +296,7 @@
         <div class="field"><label>Fecha de nacimiento</label><input type="date" id="fFechaNac"></div>
       </div>
       <button class="btn primary" id="btnAddOne">+ Agregar empleado</button>
+      <button class="btn" id="btnCancelEdit" style="display:none;">Cancelar edición</button>
       <div class="form-msg" id="formMsg"></div>
     </div>
 
@@ -341,6 +342,8 @@ const SESSION_KEY = "fpt_session_v1";
 let SESSION = null;
 let ALL_EMPLEADOS = [];
 let SEGUIMIENTO = {}; // { "empId_tipo_anio_mes": {mensaje, estatus, notas} }
+let EDITANDO_ID = null;      // id del empleado que se está editando (null = modo "agregar")
+let EDITANDO_MANUAL = false; // conserva si ya era "nuevo"/manual, para no cambiarlo al editar
 
 function escapeHtml(s){
   return String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -438,7 +441,7 @@ const warnSummary = document.getElementById("warnSummary");
 if(ADVERTENCIAS.length === 0){
   warnBanner.style.display = "none";
 }else{
-  warnSummary.textContent = `⚠ Revisar en el archivo original — ${ADVERTENCIAS.length} dato(s) dudoso(s)`;
+  warnSummary.textContent = `Revisar empleados "${ADVERTENCIAS.length}" datos dudosos`;
   ADVERTENCIAS.forEach(w=>{
     const li = document.createElement("li");
     li.textContent = w;
@@ -645,16 +648,26 @@ function renderManualTable(){
       <td>${fmtFecha(e.fechaAntig)}</td>
       <td>${fmtFecha(e.fechaNac)}</td>
       <td>${escapeHtml(e.genero)}</td>
-      <td><button class="btn danger" data-del="${e.id}" style="padding:4px 10px;">Eliminar</button></td>
+      <td>
+        <button class="btn" data-edit="${e.id}" style="padding:4px 10px; margin-right:6px;">Editar</button>
+        <button class="btn danger" data-del="${e.id}" style="padding:4px 10px;">Eliminar</button>
+      </td>
     </tr>`;
   });
   html += "</tbody></table>";
   wrap.innerHTML = html;
+  wrap.querySelectorAll('[data-edit]').forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const emp = ALL_EMPLEADOS.find(x => String(x.id) === String(btn.dataset.edit));
+      if(emp) iniciarEdicionEmpleado(emp);
+    });
+  });
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.addEventListener("click", async ()=>{
       if(!confirm("¿Eliminar a esta persona de la base de datos? También se borra su historial de seguimiento. Esta acción no se puede deshacer.")) return;
       const { error } = await sb.from("empleados").delete().eq("id", btn.dataset.del);
       if(error){ showToast("No se pudo eliminar: " + error.message, true); return; }
+      if(EDITANDO_ID === btn.dataset.del) cancelarEdicionEmpleado();
       await cargarDatos();
       showToast("Empleado eliminado.");
     });
@@ -725,6 +738,40 @@ function buildEmpleadoRecord({nombre, numEmpleado, division, puesto, area, gener
   };
 }
 
+// Carga los datos de un empleado ya existente en el formulario de arriba, para poder
+// corregir datos dudosos (nombre, fechas, puesto, etc.) sin tener que borrarlo y
+// volverlo a dar de alta. Reutiliza el mismo formulario de "Agregar un empleado".
+function iniciarEdicionEmpleado(emp){
+  EDITANDO_ID = emp.id;
+  EDITANDO_MANUAL = !!emp._manual;
+  document.getElementById("fNombre").value = emp.nombre || "";
+  document.getElementById("fNumEmpleado").value = emp.numEmpleado || "";
+  document.getElementById("fDivision").value = emp.division || "";
+  document.getElementById("fPuesto").value = emp.puesto || "";
+  document.getElementById("fArea").value = emp.area || "";
+  document.getElementById("fGenero").value = emp.genero || "";
+  document.getElementById("fFechaIngreso").value = emp.fechaIngreso || "";
+  document.getElementById("fFechaAntig").value = emp.fechaAntig || "";
+  document.getElementById("fFechaNac").value = emp.fechaNac || "";
+  document.getElementById("addFormTitle").textContent = `Editar empleado — ${emp.nombre}`;
+  document.getElementById("btnAddOne").textContent = "💾 Guardar cambios";
+  document.getElementById("btnCancelEdit").style.display = "";
+  const msg = document.getElementById("formMsg");
+  msg.textContent = ""; msg.className = "form-msg";
+  document.getElementById("fNombre").scrollIntoView({behavior:"smooth", block:"center"});
+}
+function cancelarEdicionEmpleado(){
+  EDITANDO_ID = null; EDITANDO_MANUAL = false;
+  ["fNombre","fNumEmpleado","fDivision","fPuesto","fArea","fFechaIngreso","fFechaNac","fFechaAntig"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("fGenero").value = "";
+  document.getElementById("addFormTitle").textContent = "Agregar un empleado";
+  document.getElementById("btnAddOne").textContent = "+ Agregar empleado";
+  document.getElementById("btnCancelEdit").style.display = "none";
+  const msg = document.getElementById("formMsg");
+  msg.textContent = ""; msg.className = "form-msg";
+}
+document.getElementById("btnCancelEdit").addEventListener("click", cancelarEdicionEmpleado);
+
 document.getElementById("btnAddOne").addEventListener("click", async ()=>{
   const msg = document.getElementById("formMsg");
   const nombre = document.getElementById("fNombre").value.trim();
@@ -745,8 +792,20 @@ document.getElementById("btnAddOne").addEventListener("click", async ()=>{
     fechaNacStr, fechaAntigStr,
   });
   const btn = document.getElementById("btnAddOne");
+  const editando = !!EDITANDO_ID;
   btn.disabled = true;
-  const { error } = await sb.from("empleados").insert([empleadoToDbRow(rec)]);
+  let error;
+  if(editando){
+    // Al editar, el id (llave con la que el seguimiento y los artes ya generados están
+    // enlazados) NO cambia aunque se corrija el número de empleado; y si ya era un
+    // registro del archivo original, no se marca como "nuevo".
+    const dbRow = empleadoToDbRow(rec);
+    dbRow.id = EDITANDO_ID;
+    dbRow.es_manual = EDITANDO_MANUAL;
+    ({ error } = await sb.from("empleados").update(dbRow).eq("id", EDITANDO_ID));
+  }else{
+    ({ error } = await sb.from("empleados").insert([empleadoToDbRow(rec)]));
+  }
   btn.disabled = false;
   if(error){
     msg.textContent = error.message.includes("duplicate") ? "Ya existe un empleado con ese número." : ("Error al guardar: " + error.message);
@@ -754,9 +813,10 @@ document.getElementById("btnAddOne").addEventListener("click", async ()=>{
     return;
   }
   await cargarDatos();
-  ["fNombre","fNumEmpleado","fDivision","fPuesto","fArea","fFechaIngreso","fFechaNac","fFechaAntig"].forEach(id=>document.getElementById(id).value="");
-  document.getElementById("fGenero").value = "";
-  msg.textContent = `"${rec.nombre}" agregado correctamente.`; msg.className = "form-msg ok";
+  const nombreGuardado = rec.nombre;
+  cancelarEdicionEmpleado();
+  msg.textContent = editando ? `"${nombreGuardado}" actualizado correctamente.` : `"${nombreGuardado}" agregado correctamente.`;
+  msg.className = "form-msg ok";
 });
 
 // ---------- administración: carga masiva CSV ----------
