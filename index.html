@@ -248,7 +248,7 @@
 
   <div class="tab-panel" id="tab-generar">
     <h2>Generar Artes</h2>
-    <p class="sub">Selecciona a las personas que ya tienen el mensaje del líder en estatus "Mensaje recibido" para el mes objetivo, y genera su arte en PowerPoint (formato, colores y logos del template no se modifican — solo se llenan {Nombre}, {Puesto}, {Mensaje} y, en aniversarios, {Años cumplidos}). Puedes seleccionar varias personas y se generan todas juntas.</p>
+    <p class="sub">Selecciona a las personas que ya tienen el mensaje del líder en estatus "Mensaje recibido" para el mes objetivo, y genera su arte (formato, colores y logos del template no se modifican — solo se llenan {Nombre}, {Puesto}, {Mensaje} y, en aniversarios, {Años cumplidos}). Puedes seleccionar varias personas y se generan todas juntas. Cada persona se descarga en dos formatos: <b>.pptx</b> (editable, formato 100% intacto) y <b>.png</b> (imagen ya "aplanada" para compartir rápido; si la tipografía de marca no está instalada en el equipo, el PNG puede usar una tipografía de reemplazo — el .pptx siempre conserva la original).</p>
 
     <div class="generar-section">
       <h3>Cumpleaños — mensaje recibido</h3>
@@ -996,6 +996,191 @@ async function llenarPlantilla(b64Plantilla, reemplazos){
   return await zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.presentationml.presentation"});
 }
 
+// ---- Exportar también en PNG (imagen "aplanada" para compartir rápido) ----
+// El .pptx que se descarga arriba es siempre el archivo editable real, sin tocar nada
+// de formato. El PNG es una imagen derivada de ese mismo template: se dibuja en un
+// <canvas> el fondo original y el texto ya sustituido, usando la posición, tamaño,
+// color y alineación reales leídos del propio XML del PPTX (no valores inventados).
+// Limitación conocida: si la tipografía de marca ("Belarius Sans...") no está instalada
+// en el equipo donde se genera, el navegador usa una tipografía de reemplazo similar
+// solo para el PNG — el .pptx siempre conserva la fuente original intacta.
+
+async function resolverColorTema(zip){
+  const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
+  const themeFile = zip.file("ppt/theme/theme1.xml");
+  const colores = {};
+  if(themeFile){
+    const themeXml = await themeFile.async("string");
+    const themeDoc = new DOMParser().parseFromString(themeXml, "application/xml");
+    const scheme = themeDoc.getElementsByTagNameNS(A_NS, "clrScheme")[0];
+    if(scheme){
+      Array.from(scheme.children).forEach(node=>{
+        const srgb = node.getElementsByTagNameNS(A_NS, "srgbClr")[0];
+        const sys = node.getElementsByTagNameNS(A_NS, "sysClr")[0];
+        if(srgb) colores[node.localName] = "#" + srgb.getAttribute("val");
+        else if(sys) colores[node.localName] = "#" + sys.getAttribute("lastClr");
+      });
+    }
+  }
+  let clrMap = { bg1:"lt1", tx1:"dk1", bg2:"lt2", tx2:"dk2" };
+  try{
+    const masters = zip.file(/ppt\/slideMasters\/slideMaster1\.xml/);
+    if(masters && masters[0]){
+      const masterXml = await masters[0].async("string");
+      const m = masterXml.match(/<p:clrMap([^/]*)\/>/);
+      if(m){
+        ["bg1","tx1","bg2","tx2"].forEach(k=>{
+          const mm = m[1].match(new RegExp(k+'="([^"]+)"'));
+          if(mm) clrMap[k] = mm[1];
+        });
+      }
+    }
+  }catch(e){ /* si algo falla, se usa el mapeo por defecto */ }
+  return { colores, clrMap };
+}
+
+function resolverFill(rPr, A_NS, tema){
+  if(!rPr) return "#000000";
+  const solidFill = rPr.getElementsByTagNameNS(A_NS, "solidFill")[0];
+  if(!solidFill) return "#000000";
+  const srgb = solidFill.getElementsByTagNameNS(A_NS, "srgbClr")[0];
+  if(srgb) return "#" + srgb.getAttribute("val");
+  const scheme = solidFill.getElementsByTagNameNS(A_NS, "schemeClr")[0];
+  if(scheme){
+    const val = scheme.getAttribute("val");
+    const temaKey = tema.clrMap[val] || val;
+    if(tema.colores[temaKey]) return tema.colores[temaKey];
+  }
+  return "#000000";
+}
+
+// Extrae, de la plantilla ORIGINAL (antes de sustituir llaves), la posición y formato
+// real de cada párrafo con {…} para poder dibujarlo igual en el canvas.
+async function extraerCamposPlantilla(zip){
+  const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
+  const P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main";
+  const slideXml = await zip.file("ppt/slides/slide1.xml").async("string");
+  const doc = new DOMParser().parseFromString(slideXml, "application/xml");
+  const tema = await resolverColorTema(zip);
+  const shapes = Array.from(doc.getElementsByTagNameNS(P_NS, "sp"));
+  const campos = [];
+  shapes.forEach(sp=>{
+    // Ojo: sp también puede contener <a:ext> dentro de <p:cNvPr><a:extLst> (metadatos de
+    // creationId, sin cx/cy) — hay que buscar el xfrm específicamente dentro de spPr para
+    // no agarrar por accidente ese <a:ext> equivocado.
+    const spPr = sp.getElementsByTagNameNS(P_NS, "spPr")[0];
+    const xfrm = spPr ? spPr.getElementsByTagNameNS(A_NS, "xfrm")[0] : null;
+    const off = xfrm ? xfrm.getElementsByTagNameNS(A_NS, "off")[0] : null;
+    const ext = xfrm ? xfrm.getElementsByTagNameNS(A_NS, "ext")[0] : null;
+    if(!off || !ext) return;
+    Array.from(sp.getElementsByTagNameNS(A_NS, "p")).forEach(p=>{
+      const runs = Array.from(p.getElementsByTagNameNS(A_NS, "r"));
+      if(runs.length === 0) return;
+      const fullText = runs.map(r=>{
+        const t = r.getElementsByTagNameNS(A_NS, "t")[0];
+        return t ? t.textContent : "";
+      }).join("");
+      if(fullText.indexOf("{") === -1) return;
+      const rPr = runs[0].getElementsByTagNameNS(A_NS, "rPr")[0];
+      const pPr = p.getElementsByTagNameNS(A_NS, "pPr")[0];
+      const latin = rPr ? rPr.getElementsByTagNameNS(A_NS, "latin")[0] : null;
+      campos.push({
+        fullText,
+        x: parseInt(off.getAttribute("x"), 10),
+        y: parseInt(off.getAttribute("y"), 10),
+        cx: parseInt(ext.getAttribute("cx"), 10),
+        cy: parseInt(ext.getAttribute("cy"), 10),
+        algn: pPr ? (pPr.getAttribute("algn") || "l") : "l",
+        sz: rPr && rPr.getAttribute("sz") ? parseInt(rPr.getAttribute("sz"), 10) : 1800,
+        bold: !!(rPr && rPr.getAttribute("b") === "1"),
+        color: resolverFill(rPr, A_NS, tema),
+        fuente: latin ? latin.getAttribute("typeface") : "Arial",
+      });
+    });
+  });
+  return campos;
+}
+
+async function obtenerFondoDataUrl(zip){
+  const slideXml = await zip.file("ppt/slides/slide1.xml").async("string");
+  const relXml = await zip.file("ppt/slides/_rels/slide1.xml.rels").async("string");
+  const m = slideXml.match(/<p:bg>[\s\S]*?r:embed="([^"]+)"/);
+  const rId = m ? m[1] : "rId2";
+  const relDoc = new DOMParser().parseFromString(relXml, "application/xml");
+  const rel = Array.from(relDoc.getElementsByTagName("Relationship")).find(r => r.getAttribute("Id") === rId);
+  const target = rel.getAttribute("Target").replace(/^\.\.\//, "ppt/");
+  const ext = target.split(".").pop().toLowerCase();
+  const mime = ext === "png" ? "image/png" : "image/jpeg";
+  const b64 = await zip.file(target).async("base64");
+  return `data:${mime};base64,${b64}`;
+}
+
+function partirEnLineas(ctx, texto, maxWidthPx){
+  const lineasFinales = [];
+  String(texto || "").split("\n").forEach(parrafo=>{
+    const palabras = parrafo.split(" ");
+    let actual = "";
+    palabras.forEach(palabra=>{
+      const prueba = actual ? actual + " " + palabra : palabra;
+      if(actual && ctx.measureText(prueba).width > maxWidthPx){
+        lineasFinales.push(actual);
+        actual = palabra;
+      }else{
+        actual = prueba;
+      }
+    });
+    lineasFinales.push(actual);
+  });
+  return lineasFinales;
+}
+
+// Prepara una sola vez (por plantilla) el fondo y los campos, para no releer/decodificar
+// el zip por cada persona — se reutiliza para dibujar todos los artes de ese tipo.
+async function prepararRenderPNG(b64Plantilla){
+  const zip = await JSZip.loadAsync(b64Plantilla, {base64:true});
+  const campos = await extraerCamposPlantilla(zip);
+  const presXml = await zip.file("ppt/presentation.xml").async("string");
+  const m = presXml.match(/<p:sldSz cx="(\d+)" cy="(\d+)"/);
+  const slideCx = m ? parseInt(m[1], 10) : 15238413;
+  const slideCy = m ? parseInt(m[2], 10) : 15238413;
+  const fondoUrl = await obtenerFondoDataUrl(zip);
+  const img = new Image();
+  await new Promise((resolve, reject)=>{ img.onload = resolve; img.onerror = reject; img.src = fondoUrl; });
+  return { campos, slideCx, slideCy, img };
+}
+
+async function dibujarArtePNG(prep, reemplazos, escala){
+  escala = escala || 2;
+  const anchoDeseado = 1600 * escala;
+  const pxPorEMU = anchoDeseado / prep.slideCx;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(anchoDeseado);
+  canvas.height = Math.round(prep.slideCy * pxPorEMU);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(prep.img, 0, 0, canvas.width, canvas.height);
+
+  prep.campos.forEach(campo=>{
+    let texto = campo.fullText;
+    reemplazos.forEach(([token, value])=>{ texto = texto.split(token).join(value); });
+
+    const boxX = campo.x * pxPorEMU;
+    const boxY = campo.y * pxPorEMU;
+    const boxW = campo.cx * pxPorEMU;
+    const fontPx = (campo.sz / 100) * (12700 * pxPorEMU);
+    ctx.font = `${campo.bold ? "bold " : ""}${fontPx}px "${campo.fuente}", "Arial Narrow", Arial, sans-serif`;
+    ctx.fillStyle = campo.color;
+    ctx.textBaseline = "top";
+    const align = campo.algn === "ctr" ? "center" : campo.algn === "r" ? "right" : "left";
+    ctx.textAlign = align;
+    const xTexto = align === "center" ? boxX + boxW/2 : align === "right" ? boxX + boxW : boxX;
+
+    const lineHeight = fontPx * 1.18;
+    partirEnLineas(ctx, texto, boxW).forEach((linea, i)=> ctx.fillText(linea, xTexto, boxY + i*lineHeight));
+  });
+
+  return await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
 function descargarBlob(blob, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1018,24 +1203,34 @@ document.getElementById("btnGenerarArtes").addEventListener("click", async ()=>{
   const generados = [];
   try{
     let hecho = 0;
+    const prepCumple = cumpleList.length ? await prepararRenderPNG(PPTX_CUMPLE_B64) : null;
+    const prepAniv = anivList.length ? await prepararRenderPNG(PPTX_ANIV_B64) : null;
     for(const {e, track} of cumpleList){
       status.textContent = `Generando ${++hecho} de ${total}: ${e.nombre}...`;
-      const blob = await llenarPlantilla(PPTX_CUMPLE_B64, [
+      const reemplazos = [
         ["{Nombre}", e.nombre.toUpperCase()],
         ["{Puesto}", e.puesto || ""],
         ["{Mensaje}", track.mensaje || ""],
-      ]);
-      generados.push({ blob, filename: `Cumpleanos_${sanitizeFilename(e.nombre)}.pptx` });
+      ];
+      const blobPptx = await llenarPlantilla(PPTX_CUMPLE_B64, reemplazos);
+      const blobPng = await dibujarArtePNG(prepCumple, reemplazos, 2);
+      const base = `Cumpleanos_${sanitizeFilename(e.nombre)}`;
+      generados.push({ blob: blobPptx, filename: `${base}.pptx` });
+      generados.push({ blob: blobPng, filename: `${base}.png` });
     }
     for(const {e, track} of anivList){
       status.textContent = `Generando ${++hecho} de ${total}: ${e.nombre}...`;
-      const blob = await llenarPlantilla(PPTX_ANIV_B64, [
+      const reemplazos = [
         ["{Nombre}", e.nombre],
         ["{Puesto}", e.puesto || ""],
         ["{Años cumplidos}", formatAniosCumplidos(e.aniosCumple)],
         ["{Mensaje}", track.mensaje || ""],
-      ]);
-      generados.push({ blob, filename: `Aniversario_${sanitizeFilename(e.nombre)}.pptx` });
+      ];
+      const blobPptx = await llenarPlantilla(PPTX_ANIV_B64, reemplazos);
+      const blobPng = await dibujarArtePNG(prepAniv, reemplazos, 2);
+      const base = `Aniversario_${sanitizeFilename(e.nombre)}`;
+      generados.push({ blob: blobPptx, filename: `${base}.pptx` });
+      generados.push({ blob: blobPng, filename: `${base}.png` });
     }
     if(generados.length === 1){
       descargarBlob(generados[0].blob, generados[0].filename);
@@ -1046,7 +1241,7 @@ document.getElementById("btnGenerarArtes").addEventListener("click", async ()=>{
       const zipBlob = await outZip.generateAsync({type:"blob"});
       descargarBlob(zipBlob, `Artes_${MESES[mes-1]}_${anio}.zip`);
     }
-    status.textContent = `Listo — se generaron ${generados.length} arte(s).`;
+    status.textContent = `Listo — se generaron ${total} arte(s) en PPTX + PNG (${generados.length} archivos).`;
     status.className = "generar-status ok";
   }catch(err){
     console.error(err);
