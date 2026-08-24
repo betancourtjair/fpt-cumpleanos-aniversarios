@@ -1280,7 +1280,13 @@ document.getElementById("btnGenerarArtes").addEventListener("click", async ()=>{
     }
     for(const {e, track} of anivList){
       status.textContent = `Generando ${++hecho} de ${total}: ${e.nombre}...`;
+      // La plantilla trae "{Puesto} {Años cumplidos}" en el mismo párrafo, separados por
+      // un espacio. Se sustituyen los dos juntos por "Puesto\nAños" (en vez de sustituir
+      // cada llave por separado) para que el salto de línea quede exactamente donde estaba
+      // ese espacio — así "Años" cae una línea debajo de "Puesto", sin tocar el resto del
+      // formato (mismo cuadro de texto, mismo color, misma fuente).
       const reemplazos = [
+        ["{Puesto} {Años cumplidos}", `${(e.puesto || "").trim()}\n${formatAniosCumplidos(e.aniosCumple)}`],
         ["{Nombre}", e.nombre],
         ["{Puesto}", e.puesto || ""],
         ["{Años cumplidos}", formatAniosCumplidos(e.aniosCumple)],
