@@ -513,19 +513,42 @@ function trackKey(empId, tipo, anio, mes){ return `${empId}_${tipo}_${anio}_${me
 function getTrack(empId, tipo, anio, mes){
   return SEGUIMIENTO[trackKey(empId, tipo, anio, mes)] || {mensaje:"", estatus:"Pendiente de solicitar", notas:""};
 }
-async function setTrackField(empId, tipo, anio, mes, field, val){
+// Guarda SOLO el campo que cambió (mensaje, estatus o notas), nunca los tres juntos.
+// Antes se releía el objeto local completo y se subían los tres campos en cada guardado;
+// si esta pantalla llevaba un rato abierta y alguien más (u otra pestaña) había cambiado el
+// estatus mientras tanto, escribir el mensaje mandaba de vuelta ese estatus "viejo" que
+// teníamos en memoria y lo pisaba — y al revés, cambiar el estatus podía pisar un mensaje
+// recién guardado. Al mandar nada más la llave + el campo que cambió, un guardado nunca
+// puede borrar o revertir otro campo.
+async function guardarTrackField(empId, tipo, anio, mes, field, val){
+  const payload = {
+    empleado_id: empId, tipo, anio, mes,
+    [field]: val,
+    actualizado_por: SESSION ? SESSION.usuario : null,
+    actualizado_en: new Date().toISOString(),
+  };
+  const { error } = await sb.from("seguimiento").upsert(payload, { onConflict: "empleado_id,tipo,anio,mes" });
+  if(error){ showToast("No se guardó el cambio — revisa tu conexión e inténtalo de nuevo.", true); console.error(error); }
+  else if(field === "estatus" && typeof renderGenerar === "function") renderGenerar();
+}
+
+// El estado local (lo que se ve en pantalla y lo que usa "Generar Artes") se actualiza al
+// instante en cada letra; el guardado a la base se espera un poco (debounce) para no mandar
+// una escritura por cada tecla — y se manda de una vez si el campo pierde el foco antes.
+const DEBOUNCE_GUARDADO = {};
+function setTrackField(empId, tipo, anio, mes, field, val, inmediato){
   const k = trackKey(empId, tipo, anio, mes);
   const cur = SEGUIMIENTO[k] || {mensaje:"", estatus:"Pendiente de solicitar", notas:""};
   cur[field] = val;
   SEGUIMIENTO[k] = cur;
-  const { error } = await sb.from("seguimiento").upsert({
-    empleado_id: empId, tipo, anio, mes,
-    mensaje: cur.mensaje, estatus: cur.estatus, notas: cur.notas,
-    actualizado_por: SESSION ? SESSION.usuario : null,
-    actualizado_en: new Date().toISOString(),
-  }, { onConflict: "empleado_id,tipo,anio,mes" });
-  if(error){ showToast("No se guardó el cambio — revisa tu conexión e inténtalo de nuevo.", true); console.error(error); }
-  else if(field === "estatus" && typeof renderGenerar === "function") renderGenerar();
+  const timerKey = k + "_" + field;
+  clearTimeout(DEBOUNCE_GUARDADO[timerKey]);
+  if(inmediato){
+    delete DEBOUNCE_GUARDADO[timerKey];
+    guardarTrackField(empId, tipo, anio, mes, field, val);
+  }else{
+    DEBOUNCE_GUARDADO[timerKey] = setTimeout(()=> guardarTrackField(empId, tipo, anio, mes, field, val), 700);
+  }
 }
 
 // ---------- construir filas ----------
@@ -591,9 +614,12 @@ function renderSeguimientoTable(wrapId, rows, tipo, anio, mes, diaField, fechaLa
 
   wrap.querySelectorAll('[data-role="mensaje"], [data-role="notas"]').forEach(el=>{
     el.addEventListener("input", ()=> setTrackField(el.dataset.emp, el.dataset.tipo, anio, mes, el.dataset.role, el.value));
+    // Si sale del campo (cambia de pestaña, hace clic en otro lado) se guarda de una vez,
+    // sin esperar los 700ms del debounce, para no perder la última letra si cierra rápido.
+    el.addEventListener("blur", ()=> setTrackField(el.dataset.emp, el.dataset.tipo, anio, mes, el.dataset.role, el.value, true));
   });
   wrap.querySelectorAll('[data-role="estatus"]').forEach(sel=>{
-    sel.addEventListener("change", ()=> setTrackField(sel.dataset.emp, sel.dataset.tipo, anio, mes, "estatus", sel.value));
+    sel.addEventListener("change", ()=> setTrackField(sel.dataset.emp, sel.dataset.tipo, anio, mes, "estatus", sel.value, true));
   });
 }
 
