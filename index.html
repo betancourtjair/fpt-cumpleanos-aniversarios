@@ -280,11 +280,11 @@
 
   <div class="tab-panel" id="tab-mensual">
     <h2>Artes Mensuales</h2>
-    <p class="sub">Genera la imagen del compilado del mes (mismo diseño y colores del arte individual — banner, íconos y logos del fondo intactos), con la lista completa de quiénes cumplen años o aniversario en el "Mes objetivo" seleccionado arriba. Es una imagen (.png) lista para publicar, no un arte por persona.</p>
+    <p class="sub">Genera la imagen del compilado del mes (mismo diseño y colores del arte individual — banner, íconos y logos del fondo intactos), con la lista completa de quiénes cumplen años o aniversario. Es una imagen (.png) lista para publicar, no un arte por persona.</p>
+    <p class="mes-objetivo-label" id="mesObjetivoMensualLabel"></p>
 
     <div class="generar-section">
       <h3>Compilado de Cumpleaños</h3>
-      <p class="sub">Mes objetivo seleccionado arriba.</p>
       <div class="generar-toolbar">
         <span class="count-pill" id="countMensualCumple"></span>
       </div>
@@ -293,7 +293,6 @@
 
     <div class="generar-section">
       <h3>Compilado de Aniversarios</h3>
-      <p class="sub">Mes objetivo seleccionado arriba.</p>
       <div class="generar-toolbar">
         <span class="count-pill" id="countMensualAniv"></span>
       </div>
@@ -756,6 +755,7 @@ function renderMensual(){
   const anio = parseInt(selAnio.value, 10);
   const rowsCumple = cumpleMes(mes, anio);
   const rowsAniv = anivMes(mes, anio);
+  document.getElementById("mesObjetivoMensualLabel").textContent = `Mes objetivo: ${MESES[mes-1]} ${anio}`;
   document.getElementById("countMensualCumple").textContent = `${rowsCumple.length} persona(s) en ${MESES[mes-1]}`;
   document.getElementById("countMensualAniv").textContent = `${rowsAniv.length} persona(s) en ${MESES[mes-1]}`;
   document.getElementById("btnCompiladoCumple").disabled = rowsCumple.length === 0;
