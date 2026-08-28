@@ -70,6 +70,7 @@
   .tab-btn[data-color="arteaniv"].active{color:var(--verde); border-color:var(--verde);}
   .tab-btn[data-color="admin"].active{color:var(--morado); border-color:var(--morado);}
   .tab-btn[data-color="generar"].active{color:var(--fpt-purple-dark); border-color:var(--fpt-purple-dark);}
+  .tab-btn[data-color="mensual"].active{color:var(--fpt-purple); border-color:var(--fpt-purple);}
   .tab-panel{display:none; background:#fff; border:1px solid var(--gris-borde); border-radius:0 8px 8px 8px; padding:16px; overflow-x:auto;}
   .tab-panel.active{display:block;}
   .tab-panel h2{margin:0 0 4px 0; font-size:17px; color:var(--azul);}
@@ -209,6 +210,7 @@
     <button class="tab-btn" data-color="artecumple" data-tab="tab-arte-cumple">Listado completo cumpleaños</button>
     <button class="tab-btn" data-color="arteaniv" data-tab="tab-arte-aniv">Listado completo aniversarios</button>
     <button class="tab-btn" data-color="generar" data-tab="tab-generar">🎨 Generar Artes</button>
+    <button class="tab-btn" data-color="mensual" data-tab="tab-mensual">🗓 Artes Mensuales</button>
     <button class="tab-btn" data-color="admin" data-tab="tab-admin">⚙ Administración</button>
   </div>
 
@@ -274,6 +276,31 @@
       <button class="btn primary" id="btnGenerarArtes" disabled>🎨 Generar artes seleccionadas</button>
       <span class="generar-status" id="generarStatus"></span>
     </div>
+  </div>
+
+  <div class="tab-panel" id="tab-mensual">
+    <h2>Artes Mensuales</h2>
+    <p class="sub">Genera la imagen del compilado del mes (mismo diseño y colores del arte individual — banner, íconos y logos del fondo intactos), con la lista completa de quiénes cumplen años o aniversario en el "Mes objetivo" seleccionado arriba. Es una imagen (.png) lista para publicar, no un arte por persona.</p>
+
+    <div class="generar-section">
+      <h3>Compilado de Cumpleaños</h3>
+      <p class="sub">Mes objetivo seleccionado arriba.</p>
+      <div class="generar-toolbar">
+        <span class="count-pill" id="countMensualCumple"></span>
+      </div>
+      <button class="btn primary" id="btnCompiladoCumple" disabled>🎂 Descargar compilado de Cumpleaños</button>
+    </div>
+
+    <div class="generar-section">
+      <h3>Compilado de Aniversarios</h3>
+      <p class="sub">Mes objetivo seleccionado arriba.</p>
+      <div class="generar-toolbar">
+        <span class="count-pill" id="countMensualAniv"></span>
+      </div>
+      <button class="btn primary" id="btnCompiladoAniv" disabled>🎉 Descargar compilado de Aniversarios</button>
+    </div>
+
+    <span class="generar-status" id="mensualStatus"></span>
   </div>
 
   <div class="tab-panel" id="tab-admin">
@@ -721,6 +748,18 @@ function renderAll(){
   document.getElementById("countArteAniv").textContent = `${nAniv} de ${arteAnivRows.length} empleado(s)`;
 
   renderGenerar();
+  renderMensual();
+}
+
+function renderMensual(){
+  const mes = parseInt(selMes.value, 10);
+  const anio = parseInt(selAnio.value, 10);
+  const rowsCumple = cumpleMes(mes, anio);
+  const rowsAniv = anivMes(mes, anio);
+  document.getElementById("countMensualCumple").textContent = `${rowsCumple.length} persona(s) en ${MESES[mes-1]}`;
+  document.getElementById("countMensualAniv").textContent = `${rowsAniv.length} persona(s) en ${MESES[mes-1]}`;
+  document.getElementById("btnCompiladoCumple").disabled = rowsCumple.length === 0;
+  document.getElementById("btnCompiladoAniv").disabled = rowsAniv.length === 0;
 }
 
 document.getElementById("searchArteCumple").addEventListener("input", renderAll);
@@ -1038,6 +1077,9 @@ function sanitizeFilename(s){
 function formatAniosCumplidos(n){
   return `${n} ${n === 1 ? "año" : "años"}`;
 }
+function formatFechaCorta(dia, mes){
+  return `${String(dia).padStart(2,"0")}/${String(mes).padStart(2,"0")}`;
+}
 
 // Reemplaza llaves dentro del slide del PPTX (ppt/slides/slide1.xml) sin tocar nada de
 // formato/colores/logos: solo se sustituye el TEXTO de los runs que contienen las llaves,
@@ -1267,6 +1309,89 @@ async function dibujarArtePNG(prep, reemplazos, escala){
   return await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
 }
 
+// ---- Compilado mensual (imagen con la lista completa de cumpleaños o aniversarios del
+// mes, en dos columnas) ----
+// Usa exactamente el mismo fondo que el arte individual (el título "¡Feliz Cumpleaños!"/
+// "¡Feliz Aniversario!", el banner, los íconos y los logos ya vienen dibujados en esa
+// imagen de fondo — no son texto editable en la plantilla). Solo se dibuja encima: el
+// nombre del mes (donde normalmente iría {Nombre}) y la lista de personas en dos columnas
+// (en el espacio donde normalmente irían {Puesto} y {Mensaje}), con el mismo color y
+// tipografía que usa la plantilla para el nombre.
+async function dibujarCompiladoPNG(prep, tituloMes, personas, escala){
+  escala = escala || 2;
+  const anchoDeseado = 1600 * escala;
+  const pxPorEMU = anchoDeseado / prep.slideCx;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(anchoDeseado);
+  canvas.height = Math.round(prep.slideCy * pxPorEMU);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(prep.img, 0, 0, canvas.width, canvas.height);
+
+  const campoNombre = prep.campos[0] || {x:1900000, y:4200000, cx:11400000, cy:780000, color:"#FFFFFF", fuente:"Arial"};
+  const campoLista = prep.campos[1] || campoNombre;
+  const color = campoNombre.color;
+  const fuente = campoNombre.fuente;
+
+  // Subtítulo con el mes, en el mismo cuadro donde normalmente va {Nombre}.
+  const subX = campoNombre.x * pxPorEMU, subY = campoNombre.y * pxPorEMU;
+  const subW = campoNombre.cx * pxPorEMU, subH = campoNombre.cy * pxPorEMU;
+  const subFontPx = (3500/100) * (12700 * pxPorEMU);
+  ctx.font = `bold ${subFontPx}px "${fuente}", "Arial Narrow", Arial, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(tituloMes).toUpperCase(), subX + subW/2, subY + subH/2);
+
+  // Área de la lista: desde donde normalmente empieza {Puesto} hasta un margen antes de
+  // los íconos/logos del fondo (que están más abajo, ~85% del alto de la diapositiva).
+  const listLeft = campoLista.x * pxPorEMU;
+  const listWidth = campoLista.cx * pxPorEMU;
+  const listTop = campoLista.y * pxPorEMU;
+  const listBottom = prep.slideCy * 0.84 * pxPorEMU;
+  const gap = 50 * escala;
+  const colWidth = (listWidth - gap) / 2;
+
+  if(personas.length === 0){
+    ctx.font = `${28*escala}px "${fuente}", Arial, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Nadie este mes", listLeft + listWidth/2, (listTop+listBottom)/2);
+    return await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+  }
+
+  const filas = Math.ceil(personas.length / 2);
+  const listHeight = listBottom - listTop;
+  const maxLine = 62 * escala, minLine = 26 * escala;
+  const lineHeight = Math.max(minLine, Math.min(maxLine, listHeight / filas));
+  const fontBase = lineHeight * 0.52;
+
+  [personas.slice(0, filas), personas.slice(filas)].forEach((columna, colIdx)=>{
+    const xCol = listLeft + colIdx * (colWidth + gap);
+    columna.forEach((p, i)=>{
+      const y = listTop + i*lineHeight + lineHeight/2;
+      const nombreTxt = `•  ${p.nombre} `;
+      const subTxt = `(${p.sub})`;
+      // Si el nombre es muy largo para la columna, se reduce un poco solo esa línea
+      // (en vez de encimarse con la columna de al lado o salirse del lienzo).
+      let fpx = fontBase;
+      ctx.font = `bold ${fpx}px "${fuente}", Arial, sans-serif`;
+      let ancho = ctx.measureText(nombreTxt).width;
+      ctx.font = `${fpx}px "${fuente}", Arial, sans-serif`;
+      ancho += ctx.measureText(subTxt).width;
+      if(ancho > colWidth) fpx = fpx * Math.max(0.55, colWidth/ancho);
+
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = color;
+      ctx.font = `bold ${fpx}px "${fuente}", Arial, sans-serif`;
+      ctx.fillText(nombreTxt, xCol, y);
+      const anchoNombre = ctx.measureText(nombreTxt).width;
+      ctx.font = `${fpx}px "${fuente}", Arial, sans-serif`;
+      ctx.fillText(subTxt, xCol + anchoNombre, y);
+    });
+  });
+
+  return await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+}
+
 function descargarBlob(blob, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1343,6 +1468,51 @@ document.getElementById("btnGenerarArtes").addEventListener("click", async ()=>{
     btn.disabled = SELECCION_GENERAR.size === 0;
   }
 });
+
+// ---------- Artes Mensuales (compilado del mes) ----------
+let PREP_COMPILADO_CUMPLE = null;
+let PREP_COMPILADO_ANIV = null;
+
+async function generarCompiladoMensual({ btnId, tipo, plantillaB64, obtenerPrep, guardarPrep, construirPersona, nombreArchivo }){
+  const status = document.getElementById("mensualStatus");
+  const mes = parseInt(selMes.value, 10);
+  const anio = parseInt(selAnio.value, 10);
+  const rows = tipo === "cumple" ? cumpleMes(mes, anio) : anivMes(mes, anio);
+  if(rows.length === 0) return;
+  const btn = document.getElementById(btnId);
+  btn.disabled = true;
+  status.textContent = "Generando compilado...";
+  status.className = "generar-status";
+  try{
+    let prep = obtenerPrep();
+    if(!prep){ prep = await prepararRenderPNG(plantillaB64); guardarPrep(prep); }
+    const personas = rows.map(construirPersona);
+    const blob = await dibujarCompiladoPNG(prep, MESES[mes-1], personas, 2);
+    descargarBlob(blob, nombreArchivo(anio, mes));
+    status.textContent = `Listo — compilado de ${rows.length} persona(s) descargado.`;
+    status.className = "generar-status ok";
+  }catch(err){
+    console.error(err);
+    status.textContent = "Ocurrió un error generando el compilado. Intenta de nuevo.";
+    status.className = "generar-status err";
+  }finally{
+    const rowsAhora = tipo === "cumple" ? cumpleMes(parseInt(selMes.value,10), parseInt(selAnio.value,10)) : anivMes(parseInt(selMes.value,10), parseInt(selAnio.value,10));
+    btn.disabled = rowsAhora.length === 0;
+  }
+}
+
+document.getElementById("btnCompiladoCumple").addEventListener("click", ()=> generarCompiladoMensual({
+  btnId: "btnCompiladoCumple", tipo: "cumple", plantillaB64: PPTX_CUMPLE_B64,
+  obtenerPrep: ()=>PREP_COMPILADO_CUMPLE, guardarPrep: p=>PREP_COMPILADO_CUMPLE=p,
+  construirPersona: e => ({ nombre: e.nombre.toUpperCase(), sub: formatFechaCorta(e.diaNac, e.mesNac) }),
+  nombreArchivo: (anio, mes) => `Compilado_Cumpleanos_${MESES[mes-1]}_${anio}.png`,
+}));
+document.getElementById("btnCompiladoAniv").addEventListener("click", ()=> generarCompiladoMensual({
+  btnId: "btnCompiladoAniv", tipo: "aniv", plantillaB64: PPTX_ANIV_B64,
+  obtenerPrep: ()=>PREP_COMPILADO_ANIV, guardarPrep: p=>PREP_COMPILADO_ANIV=p,
+  construirPersona: e => ({ nombre: e.nombre.toUpperCase(), sub: formatAniosCumplidos(e.aniosCumple) }),
+  nombreArchivo: (anio, mes) => `Compilado_Aniversarios_${MESES[mes-1]}_${anio}.png`,
+}));
 
 // ---------- arranque ----------
 const existingSession = loadSession();
