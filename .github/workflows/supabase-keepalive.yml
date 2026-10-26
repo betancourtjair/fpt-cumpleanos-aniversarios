@@ -1,0 +1,36 @@
+name: Supabase keepalive
+
+# Hace una consulta diaria a la base de Supabase "FPT Cumpleaños" para que el
+# plan gratuito no la pause por inactividad (pausa tras 7 dias sin actividad).
+# Si Supabase no responde con datos, el workflow falla y GitHub te manda correo.
+
+on:
+  schedule:
+    - cron: '17 14 * * *'   # todos los dias, 14:17 UTC (8:17 am CDMX)
+  workflow_dispatch:         # permite correrlo a mano desde la pestana Actions
+
+permissions:
+  actions: write             # solo para el paso que evita que GitHub desactive el cron
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Consultar Supabase
+        run: |
+          URL="https://wcixtfwfigvnscsjaltm.supabase.co/rest/v1/empleados?select=id&limit=1"
+          KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjaXh0ZndmaWd2bnNjc2phbHRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMzEzMDgsImV4cCI6MjEwMjkwNzMwOH0.cAzRBfwab57MI_KwblUhue0TF1iB8neJczZDaDWFSzg"
+          body=$(curl -sS --max-time 30 --retry 3 --retry-delay 20 --retry-all-errors "$URL" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true)
+          echo "Respuesta: ${body:0:200}"
+          case "$body" in
+            \[*) echo "OK: Supabase respondio con datos." ;;
+            *) echo "::error::Supabase no respondio con datos. Probablemente esta PAUSADO: entra a https://supabase.com/dashboard/project/wcixtfwfigvnscsjaltm y da clic en Resume project."; exit 1 ;;
+          esac
+
+      - name: Mantener activo este workflow (GitHub desactiva crons tras 60 dias sin actividad en el repo)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/supabase-keepalive.yml/enable" || true
